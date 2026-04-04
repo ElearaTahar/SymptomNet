@@ -1,6 +1,40 @@
 import pandas as pd
 import streamlit as st
 
+def normalize_symptoms_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    df["label"] = df["label"].fillna("").astype(str).str.strip()
+    df["category"] = df["category"].fillna("Autre").astype(str).str.strip()
+    df["category"] = df["category"].replace("", "Autre")
+
+    df["intensity"] = pd.to_numeric(df["intensity"], errors="coerce").fillna(1)
+    df["intensity"] = df["intensity"].clip(lower=1, upper=10)
+
+    df = df[df["label"] != ""]
+    df = df.drop_duplicates(subset=["label"], keep="first")
+
+    return df.reset_index(drop=True)
+
+def normalize_edges_df(df: pd.DataFrame, valid_labels: set[str]) -> pd.DataFrame:
+    df = df.copy()
+
+    df["source"] = df["source"].fillna("").astype(str).str.strip()
+    df["target"] = df["target"].fillna("").astype(str).str.strip()
+
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.1)
+    df["weight"] = df["weight"].clip(lower=0.1, upper=1.0)
+
+    df = df[
+        (df["source"] != "")
+        & (df["target"] != "")
+        & (df["source"].isin(valid_labels))
+        & (df["target"].isin(valid_labels))
+        & (df["source"] != df["target"])
+    ]
+
+    return df.reset_index(drop=True)
+
 st.set_page_config(page_title="SymptomNet", layout="wide")
 
 st.title("SymptomNet")
@@ -59,7 +93,7 @@ with left_col:
                 max_value=10,
                 step=1,
             ),
-            "ccategory": st.column_config.SelectboxColumn(
+            "category": st.column_config.SelectboxColumn(
                 "Catégorie",
                 options=["Diagnostic", "Environnement", "Autre"],
             )
@@ -99,6 +133,10 @@ with right_col:
             )
         }
     )
+
+symptoms_df = normalize_symptoms_df(pd.DataFrame(symptoms_df))
+valid_labels = set(symptoms_df["label"].tolist())
+edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 
 st.divider()
 

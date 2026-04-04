@@ -26,4 +26,13 @@ default_symptoms = pd.DataFrame(
 )
 
 st.subheader("Symptômes")
-st.dataframe(default_symptoms, use_container_width=True, hide_index=True)
+
+symptoms_df = st.data_editor(
+    default_symptoms, 
+    num_rows="dynamic", 
+    use_container_width=True, 
+    hide_index=True,
+)
+
+st.write("Données actuelles :")
+st.dataframe(symptoms_df, use_container_width=True, hide_index=True)

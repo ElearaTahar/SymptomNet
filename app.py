@@ -1,3 +1,5 @@
+import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -190,6 +192,48 @@ def render_pyvis_graph(graph: nx.Graph) -> str:
 
     return html
 
+# --- R analysis -----------------------------------------------------------
+def export_network_to_json(symptoms_df, edges_df, path="data/network_data.json"):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "nodes": symptoms_df.to_dict(orient="records"),
+        "edges": edges_df.to_dict(orient="records"),
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return path
+
+def load_r_results(path="data/r_results.json"):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return pd.DataFrame(json.load(f))
+    except FileNotFoundError:
+        return None
+    
+def run_r_analysis() -> bool:
+    try:
+        result = subprocess.run(
+            ["Rscript", "r/analyze_network.R"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.stdout:
+            st.info(result.stdout)
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        st.error("Erreur pendant l'exécution du script R.")
+        if e.stdout:
+            st.code(e.stdout)
+        if e.stderr:
+            st.code(e.stderr)
+        return False
 
 # --- Page setup ------------------------------------------------------------
 st.set_page_config(page_title="SymptomNet", layout="wide")
@@ -283,6 +327,22 @@ kpi_col3.metric(
     "Symptôme le plus central",
     metrics_df.iloc[0]["symptom"] if not metrics_df.empty else "-",
 )
+
+if st.button("Exporter le réseau pour analyse R"):
+    filepath = export_network_to_json(symptoms_df, edges_df)
+    st.success(f"Réseau exporté vers {filepath}")
+
+if st.button("Analyser le réseau avec R"):
+    export_network_to_json(symptoms_df, edges_df)
+
+    success = run_r_analysis()
+
+    if success:
+        r_metrics_df = load_r_results()
+
+        if r_metrics_df is not None:
+            st.subheader("Centralités calculées par R")
+            st.dataframe(r_metrics_df, use_container_width=True, hide_index=True)
 
 legend_cols = st.columns(3)
 legend_cols[0].markdown("🔴 **Diagnostic**")

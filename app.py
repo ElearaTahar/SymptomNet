@@ -1,6 +1,10 @@
+import tempfile
+from pathlib import Path
+
 import networkx as nx
 import pandas as pd
 import streamlit as st
+from pyvis.network import Network
 
 def normalize_symptoms_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -86,6 +90,73 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
 
     return metrics_df
 
+def color_for_category(category: str) -> str:
+    colors = {
+        "Diagnostic": "#ef4444",
+        "Environnement": "#3b82f6",
+        "Autre": "#10b981",
+    }
+    return colors.get(category, "#8b5cf6")
+
+def render_pyvis_graph(graph: nx.Graph) -> str:
+    net = Network(
+        height="650px",
+        width="100%",
+        bgcolor="#ffffff",
+        font_color="#111827",
+    )
+
+    net.barnes_hut()
+
+    for node, attrs in graph.nodes(data=True):
+        intensity = float(attrs.get("intensity", 1))
+        category = attrs.get("category", "Autre")
+        color = color_for_category(category)
+
+        net.add_node(
+            node,
+            label=node,
+            title=f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
+            color=color,
+            size=15 + (intensity * 3),
+        )
+
+    for source, target, attrs in graph.edges(data=True):
+        weight = float(attrs.get("weight", 0.1))
+
+        net.add_edge(
+            source,
+            target,
+            value=weight * 5,
+            title=f"Poids: {weight}",
+        )
+
+    net.set_options(
+        """
+        {
+          "interaction": {
+            "hover": true,
+            "navigationButtons": true,
+            "keyboard": true
+          },
+          "physics": {
+            "enabled": true,
+            "barnesHut": {
+              "gravitationalConstant": -3000,
+              "springLength": 180,
+              "springConstant": 0.04
+            }
+          }
+        }
+        """
+    )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
+        net.save_graph(tmp_file.name)
+        html = Path(tmp_file.name).read_text(encoding="utf-8")
+
+    return html
+
 st.set_page_config(page_title="SymptomNet", layout="wide")
 
 st.title("SymptomNet")
@@ -97,7 +168,7 @@ Ce prototype permet de :
 - saisir des symptômes
 - saisir des relations entre symptômes
 - visualiser un réseau interactif
-- reprérer les symptômes les plus centraux
+- repérer les symptômes les plus centraux
 """
 )
 
@@ -194,21 +265,44 @@ metrics_df = compute_metrics(graph)
 
 st.divider()
 
-st.subheader("Résumé du réseau")
-st.write(f"Nombre de symptômes : {graph.number_of_nodes()}")
-st.write(f"Nombre de relations : {graph.number_of_edges()}")
-st.write(f"Noeuds du graphe : {list(graph.nodes())}")
+kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+kpi_col1.metric("Nombre de symptômes", graph.number_of_nodes())
+kpi_col2.metric("Nombre de relations", graph.number_of_edges())
+kpi_col3.metric(
+    "Symptôme le plus central",
+    metrics_df.iloc[0]["symptom"] if not metrics_df.empty else "-",
+)
 
-st.subheader("Centralités")
+legend_cols = st.columns(3)
+legend_cols[0].markdown("🔴 **Diagnostic**")
+legend_cols[1].markdown("🔵 **Environnement**")
+legend_cols[2].markdown("🟢 **Autre**")
 
-if metrics_df.empty:
-    st.info("Aucune métrique disponible.")
-else:
-    st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+graph_col, metrics_col = st.columns([2, 1])
 
-    top_symptom = metrics_df.iloc[0]["symptom"]
+with graph_col:
+    st.subheader("Réseau")
+    if graph.number_of_nodes() == 0:
+        st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
+    else:
+        html = render_pyvis_graph(graph)
+        st.components.v1.html(html, height=700, scrolling=True)
 
-    st.write(f"Symptôme le plus central actuellement : **{top_symptom}**")
+with metrics_col:
+    st.subheader("Centralités")
+    if metrics_df.empty:
+        st.info("Aucune métrique disponible.")
+    else:
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+
+        top_symptom = metrics_df.iloc[0]["symptom"]
+        st.write(f"Le symptôme le plus central actuellement est **{top_symptom}**.")
+
+        if len(metrics_df) >= 3:
+            top_3 = ", ".join(metrics_df.head(3)["symptom"].tolist())
+            st.write(f"Top 3 actuel : **{top_3}**.")
+
+st.divider()
 
 preview_left, preview_right = st.columns(2)
 

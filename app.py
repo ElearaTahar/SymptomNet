@@ -1,3 +1,4 @@
+import networkx as nx
 import pandas as pd
 import streamlit as st
 
@@ -34,6 +35,25 @@ def normalize_edges_df(df: pd.DataFrame, valid_labels: set[str]) -> pd.DataFrame
     ]
 
     return df.reset_index(drop=True)
+
+def build_graph(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
+    graph = nx.Graph()
+
+    for row in symptoms_df.itertuples(index=False):
+        graph.add_node(
+            row.label,
+            intensity=float(row.intensity),
+            category=row.category,
+        )
+
+    for row in edges_df.itertuples(index=False):
+        graph.add_edge(
+            row.source,
+            row.target,
+            weight=float(row.weight),
+        )
+
+    return graph
 
 st.set_page_config(page_title="SymptomNet", layout="wide")
 
@@ -138,7 +158,14 @@ symptoms_df = normalize_symptoms_df(pd.DataFrame(symptoms_df))
 valid_labels = set(symptoms_df["label"].tolist())
 edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 
+graph = build_graph(symptoms_df, edges_df)
+
 st.divider()
+
+st.subheader("Résumé du réseau")
+st.write(f"Nombre de symptômes : {graph.number_of_nodes()}")
+st.write(f"Nombre de relations : {graph.number_of_edges()}")
+st.write(f"Noeuds du graphe : {list(graph.nodes())}")
 
 preview_left, preview_right = st.columns(2)
 

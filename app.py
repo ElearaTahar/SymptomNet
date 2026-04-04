@@ -55,6 +55,37 @@ def build_graph(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
 
     return graph
 
+def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
+    if graph.number_of_nodes() == 0:
+        return pd.DataFrame(
+            columns=["symptom", "degree", "weighted_degree", "betweenness"]
+        )
+
+    degree = dict(graph.degree())
+    weighted_degree = dict(graph.degree(weight="weight"))
+    betweenness = nx.betweenness_centrality(graph, weight="weight", normalized=True)
+
+    rows = []
+
+    for node in graph.nodes():
+        rows.append(
+            {
+                "symptom": node,
+                "degree": degree.get(node, 0),
+                "weighted_degree": round(weighted_degree.get(node, 0.0), 3),
+                "betweenness": round(betweenness.get(node, 0.0), 3),
+            }
+        )
+
+    metrics_df = pd.DataFrame(rows)
+
+    metrics_df = metrics_df.sort_values(
+        by=["weighted_degree", "betweenness", "degree", "symptom"],
+        ascending=[False, False, False, True],
+    ).reset_index(drop=True)
+
+    return metrics_df
+
 st.set_page_config(page_title="SymptomNet", layout="wide")
 
 st.title("SymptomNet")
@@ -159,6 +190,7 @@ valid_labels = set(symptoms_df["label"].tolist())
 edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 
 graph = build_graph(symptoms_df, edges_df)
+metrics_df = compute_metrics(graph)
 
 st.divider()
 
@@ -166,6 +198,17 @@ st.subheader("Résumé du réseau")
 st.write(f"Nombre de symptômes : {graph.number_of_nodes()}")
 st.write(f"Nombre de relations : {graph.number_of_edges()}")
 st.write(f"Noeuds du graphe : {list(graph.nodes())}")
+
+st.subheader("Centralités")
+
+if metrics_df.empty:
+    st.info("Aucune métrique disponible.")
+else:
+    st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+
+    top_symptom = metrics_df.iloc[0]["symptom"]
+
+    st.write(f"Symptôme le plus central actuellement : **{top_symptom}**")
 
 preview_left, preview_right = st.columns(2)
 

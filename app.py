@@ -25,6 +25,11 @@ default_symptoms = pd.DataFrame(
     ]
 )
 
+default_symptoms["category"] = pd.Categorical(
+    default_symptoms["category"],
+    categories=["Diagnostic", "Environnement", "Autre"]
+)
+
 st.subheader("Symptômes")
 
 symptoms_df = st.data_editor(
@@ -32,6 +37,22 @@ symptoms_df = st.data_editor(
     num_rows="dynamic", 
     use_container_width=True, 
     hide_index=True,
+    column_config={
+        "label": st.column_config.TextColumn(
+            "Symptôme",
+            required=True,
+        ),
+        "intensity": st.column_config.NumberColumn(
+            "Intensité",
+            min_value=1,
+            max_value=10,
+            step=1,
+        ),
+        "ccategory": st.column_config.SelectboxColumn(
+            "Catégorie",
+            options=["Diagnostic", "Environnement", "Autre"],
+        )
+    }
 )
 
 st.write("Données actuelles :")

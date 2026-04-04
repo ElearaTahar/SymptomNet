@@ -1,3 +1,4 @@
+import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="SymptomNet", layout="wide")
@@ -14,3 +15,15 @@ Ce prototype permet de :
 - reprérer les symptômes les plus centraux
 """
 )
+
+default_symptoms = pd.DataFrame(
+    [
+        {"label": "Anxiété", "intensity": 7, "category": "Diagnostic"},
+        {"label": "Insomnie", "intensity": 5, "category": "Autre"},
+        {"label": "Fatigue", "intensity": 6, "category": "Autre"},
+        {"label": "Conflit familial", "intensity": 8, "category": "Environnement"},
+    ]
+)
+
+st.subheader("Symptômes")
+st.dataframe(default_symptoms, use_container_width=True, hide_index=True)

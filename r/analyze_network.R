@@ -13,7 +13,7 @@ edges <- data$edges
 # --- Safety checks ----------------------------------------------------------
 if (is.null(nodes) || nrow(nodes) == 0) {
   write_json(data.frame(), output_path, pretty = TRUE, auto_unbox = TRUE)
-  cat("Aucun noeud fourni. Resultats vides ecrits dans", output_path, "\n")
+  cat("No nodes provided. Empty results written.\n")
   quit(save = "no")
 }
 
@@ -22,11 +22,12 @@ if (is.null(edges) || nrow(edges) == 0) {
     symptom = as.character(nodes$label),
     strength = rep(0, nrow(nodes)),
     closeness = rep(0, nrow(nodes)),
-    betweenness = rep(0, nrow(nodes))
+    betweenness = rep(0, nrow(nodes)),
+    expected_influence = rep(0, nrow(nodes))
   )
 
   write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
-  cat("Aucune arete fournie. Resultats vides de centralite ecrits dans", output_path, "\n")
+  cat("No edges provided. Empty centrality results written.\n")
   quit(save = "no")
 }
 
@@ -35,7 +36,6 @@ edges$source <- as.character(edges$source)
 edges$target <- as.character(edges$target)
 edges$weight <- as.numeric(edges$weight)
 
-# Remove invalid rows
 edges <- edges[
   !is.na(edges$source) &
     !is.na(edges$target) &
@@ -49,62 +49,89 @@ if (nrow(edges) == 0) {
     symptom = as.character(nodes$label),
     strength = rep(0, nrow(nodes)),
     closeness = rep(0, nrow(nodes)),
-    betweenness = rep(0, nrow(nodes))
+    betweenness = rep(0, nrow(nodes)),
+    expected_influence = rep(0, nrow(nodes))
   )
 
   write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
-  cat("Aucune arete valide apres nettoyage. Resultats ecrits dans", output_path, "\n")
+  cat("No valid edges after cleaning.\n")
   quit(save = "no")
 }
 
-# Ensure weights are valid and positive
-edges$weight[is.na(edges$weight)] <- 0.1
-edges$weight[edges$weight <= 0] <- 0.1
+# Keep signed weights for influence metrics
+edges$weight[is.na(edges$weight)] <- 0
 
-# igraph closeness/betweenness interpret weights as distances/costs.
-# Your UI weight means "strength of relationship", so we invert it to build distances.
-edges$distance <- 1 / edges$weight
+# Remove exact zero-weight edges from shortest-path computation
+edges$abs_weight <- abs(edges$weight)
 
-# --- Build graph ------------------------------------------------------------
-g <- graph_from_data_frame(
-  d = edges[, c("source", "target", "weight", "distance")],
+# Positive distance is required for closeness/betweenness
+edges$distance <- NA_real_
+edges$distance[edges$abs_weight > 0] <- 1 / edges$abs_weight[edges$abs_weight > 0]
+
+# --- Build graphs -----------------------------------------------------------
+g_signed <- graph_from_data_frame(
+  d = edges[, c("source", "target", "weight")],
+  vertices = nodes,
+  directed = FALSE
+)
+
+edges_for_paths <- edges[!is.na(edges$distance), c("source", "target", "weight", "distance")]
+
+g_paths <- graph_from_data_frame(
+  d = edges_for_paths,
   vertices = nodes,
   directed = FALSE
 )
 
 # --- Compute centralities ---------------------------------------------------
-strength_values <- strength(g, weights = E(g)$weight)
 
-closeness_values <- closeness(
-  g,
-  vids = V(g),
-  mode = "all",
-  weights = E(g)$distance,
-  normalized = TRUE
-)
+# Signed weighted sum
+expected_influence_values <- strength(g_signed, weights = E(g_signed)$weight)
 
-betweenness_values <- betweenness(
-  g,
-  v = V(g),
-  directed = FALSE,
-  weights = E(g)$distance,
-  normalized = TRUE
-)
+# Absolute weighted sum
+strength_values <- strength(g_signed, weights = abs(E(g_signed)$weight))
 
-# Replace NaN/Inf that can appear on disconnected graphs
+if (ecount(g_paths) > 0) {
+  closeness_values <- closeness(
+    g_paths,
+    vids = V(g_paths),
+    mode = "all",
+    weights = E(g_paths)$distance,
+    normalized = TRUE
+  )
+
+  betweenness_values <- betweenness(
+    g_paths,
+    v = V(g_paths),
+    directed = FALSE,
+    weights = E(g_paths)$distance,
+    normalized = TRUE
+  )
+} else {
+  closeness_values <- rep(0, vcount(g_signed))
+  names(closeness_values) <- V(g_signed)$name
+
+  betweenness_values <- rep(0, vcount(g_signed))
+  names(betweenness_values) <- V(g_signed)$name
+}
+
 closeness_values[!is.finite(closeness_values)] <- 0
 betweenness_values[!is.finite(betweenness_values)] <- 0
 
 # --- Build output -----------------------------------------------------------
 output <- data.frame(
-  symptom = V(g)$name,
-  strength = round(as.numeric(strength_values), 3),
-  closeness = round(as.numeric(closeness_values), 3),
-  betweenness = round(as.numeric(betweenness_values), 3),
+  symptom = V(g_signed)$name,
+  strength = round(as.numeric(strength_values[V(g_signed)$name]), 3),
+  closeness = round(as.numeric(closeness_values[V(g_signed)$name]), 3),
+  betweenness = round(as.numeric(betweenness_values[V(g_signed)$name]), 3),
+  expected_influence = round(as.numeric(expected_influence_values[V(g_signed)$name]), 3),
   stringsAsFactors = FALSE
 )
 
+output[is.na(output)] <- 0
+
 output <- output[order(
+  -output$expected_influence,
   -output$strength,
   -output$closeness,
   -output$betweenness,
@@ -113,4 +140,4 @@ output <- output[order(
 
 write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
 
-cat("Analyse terminee : resultats ecrits dans", output_path, "\n")
+cat("Network analysis complete. Results written to JSON.\n")

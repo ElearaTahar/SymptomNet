@@ -63,8 +63,8 @@ def normalize_edges_df(df: pd.DataFrame, valid_labels: set[str]) -> pd.DataFrame
     df["source"] = df["source"].fillna("").astype(str).str.strip()
     df["target"] = df["target"].fillna("").astype(str).str.strip()
 
-    df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.1)
-    df["weight"] = df["weight"].clip(lower=0.1, upper=1.0)
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0)
+    df["weight"] = df["weight"].clip(lower=-1.0, upper=1.0)
 
     df = df[
         (df["source"] != "")
@@ -101,12 +101,56 @@ def build_graph(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
 def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
     if graph.number_of_nodes() == 0:
         return pd.DataFrame(
-            columns=["symptom", "degree", "weighted_degree", "betweenness"]
+            columns=[
+                "symptom",
+                "degree",
+                "strength_abs",
+                "expected_influence",
+                "betweenness",
+            ]
         )
 
     degree = dict(graph.degree())
-    weighted_degree = dict(graph.degree(weight="weight"))
-    betweenness = nx.betweenness_centrality(graph, weight="weight", normalized=True)
+
+    strength_abs = {
+        node: round(
+            sum(abs(float(data.get("weight", 0.0))) for _, _, data in graph.edges(node, data=True)),
+            3,
+        )
+        for node in graph.nodes()
+    }
+
+    expected_influence = {
+        node: round(
+            sum(float(data.get("weight", 0.0)) for _, _, data in graph.edges(node, data=True)),
+            3,
+        )
+        for node in graph.nodes()
+    }
+
+    distance_graph = nx.Graph()
+    for node, attrs in graph.nodes(data=True):
+        distance_graph.add_node(node, **attrs)
+
+    for source, target, attrs in graph.edges(data=True):
+        weight = float(attrs.get("weight", 0.0))
+        abs_weight = abs(weight)
+
+        if abs_weight == 0:
+            continue
+
+        distance_graph.add_edge(
+            source,
+            target,
+            weight=weight,
+            distance=1 / abs_weight,
+        )
+
+    betweenness = nx.betweenness_centrality(
+        distance_graph,
+        weight="distance",
+        normalized=True,
+    ) if distance_graph.number_of_edges() > 0 else {node: 0.0 for node in graph.nodes()}
 
     rows = []
     for node in graph.nodes():
@@ -114,15 +158,16 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
             {
                 "symptom": node,
                 "degree": degree.get(node, 0),
-                "weighted_degree": round(weighted_degree.get(node, 0.0), 3),
+                "strength_abs": strength_abs.get(node, 0.0),
+                "expected_influence": expected_influence.get(node, 0.0),
                 "betweenness": round(betweenness.get(node, 0.0), 3),
             }
         )
 
     metrics_df = pd.DataFrame(rows)
     metrics_df = metrics_df.sort_values(
-        by=["weighted_degree", "betweenness", "degree", "symptom"],
-        ascending=[False, False, False, True],
+        by=["expected_influence", "strength_abs", "betweenness", "degree", "symptom"],
+        ascending=[False, False, False, False, True],
     ).reset_index(drop=True)
 
     return metrics_df
@@ -327,7 +372,7 @@ with right_col:
             ),
             "weight": st.column_config.NumberColumn(
                 "Poids",
-                min_value=0.1,
+                min_value=-1.0,
                 max_value=1.0,
                 step=0.1,
             ),

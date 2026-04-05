@@ -192,8 +192,9 @@ def render_pyvis_graph(graph: nx.Graph) -> str:
 
     return html
 
-# --- R analysis -----------------------------------------------------------
-def export_network_to_json(symptoms_df, edges_df, path="data/network_data.json"):
+
+# --- R analysis ------------------------------------------------------------
+def export_network_to_json(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame, path: str = "data/network_data.json") -> str:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
     data = {
@@ -206,13 +207,15 @@ def export_network_to_json(symptoms_df, edges_df, path="data/network_data.json")
 
     return path
 
-def load_r_results(path="data/r_results.json"):
+
+def load_r_results(path: str = "data/r_results.json") -> pd.DataFrame | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return pd.DataFrame(json.load(f))
     except FileNotFoundError:
         return None
-    
+
+
 def run_r_analysis() -> bool:
     try:
         result = subprocess.run(
@@ -234,6 +237,7 @@ def run_r_analysis() -> bool:
         if e.stderr:
             st.code(e.stderr)
         return False
+
 
 # --- Page setup ------------------------------------------------------------
 st.set_page_config(page_title="SymptomNet", layout="wide")
@@ -259,7 +263,7 @@ with left_col:
     symptoms_df = st.data_editor(
         DEFAULT_SYMPTOMS,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "label": st.column_config.TextColumn("Symptôme", required=True),
@@ -287,7 +291,7 @@ with right_col:
     edges_df = st.data_editor(
         DEFAULT_EDGES,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "source": st.column_config.SelectboxColumn(
@@ -317,6 +321,9 @@ edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 graph = build_graph(symptoms_df, edges_df)
 metrics_df = compute_metrics(graph)
 
+if "r_metrics_df" not in st.session_state:
+    st.session_state["r_metrics_df"] = None
+
 # --- Results ---------------------------------------------------------------
 st.divider()
 
@@ -328,21 +335,27 @@ kpi_col3.metric(
     metrics_df.iloc[0]["symptom"] if not metrics_df.empty else "-",
 )
 
-if st.button("Exporter le réseau pour analyse R"):
-    filepath = export_network_to_json(symptoms_df, edges_df)
-    st.success(f"Réseau exporté vers {filepath}")
+action_col1, action_col2 = st.columns([1, 1])
 
-if st.button("Analyser le réseau avec R"):
-    export_network_to_json(symptoms_df, edges_df)
+with action_col1:
+    if st.button("Analyser le réseau avec R"):
+        export_network_to_json(symptoms_df, edges_df)
 
-    success = run_r_analysis()
+        success = run_r_analysis()
 
-    if success:
-        r_metrics_df = load_r_results()
+        if success:
+            r_metrics_df = load_r_results()
 
-        if r_metrics_df is not None:
-            st.subheader("Centralités calculées par R")
-            st.dataframe(r_metrics_df, use_container_width=True, hide_index=True)
+            if r_metrics_df is not None:
+                st.session_state["r_metrics_df"] = r_metrics_df
+                st.success("Analyse R terminée avec succès.")
+            else:
+                st.error("Le fichier de résultats R est introuvable ou vide.")
+
+with action_col2:
+    if st.button("Réinitialiser les résultats R"):
+        st.session_state["r_metrics_df"] = None
+        st.success("Résultats R réinitialisés.")
 
 legend_cols = st.columns(3)
 legend_cols[0].markdown("🔴 **Diagnostic**")
@@ -357,14 +370,28 @@ with graph_col:
         st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
     else:
         html = render_pyvis_graph(graph)
-        st.components.v1.html(html, height=700, scrolling=True)
+
+        tmp_path = Path("data/network_preview.html")
+        tmp_path.write_text(html, encoding="utf-8")
+
+        st.iframe(str(tmp_path), height=700)
 
 with metrics_col:
     st.subheader("Centralités")
-    if metrics_df.empty:
+
+    r_metrics_df = st.session_state.get("r_metrics_df")
+
+    if r_metrics_df is not None and not r_metrics_df.empty:
+        st.caption("Résultats calculés par R (igraph)")
+        st.dataframe(r_metrics_df, width="stretch", hide_index=True)
+
+        top_symptom = r_metrics_df.iloc[0]["symptom"]
+        st.write(f"Le symptôme le plus central selon R est **{top_symptom}**.")
+    elif metrics_df.empty:
         st.info("Aucune métrique disponible.")
     else:
-        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+        st.caption("Résultats calculés localement en Python")
+        st.dataframe(metrics_df, width="stretch", hide_index=True)
 
         top_symptom = metrics_df.iloc[0]["symptom"]
         st.write(f"Le symptôme le plus central actuellement est **{top_symptom}**.")

@@ -11,12 +11,6 @@ from pyvis.network import Network
 
 CATEGORY_OPTIONS = ["Diagnostic", "Environnement", "Autre"]
 
-CATEGORY_COLORS = {
-    "Diagnostic": "#ef4444",
-    "Environnement": "#3b82f6",
-    "Autre": "#10b981",
-}
-
 DEFAULT_SYMPTOMS = pd.DataFrame(
     [
         {"label": "Anxiété", "intensity": 7, "category": "Diagnostic"},
@@ -114,7 +108,10 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
 
     strength_abs = {
         node: round(
-            sum(abs(float(data.get("weight", 0.0))) for _, _, data in graph.edges(node, data=True)),
+            sum(
+                abs(float(data.get("weight", 0.0)))
+                for _, _, data in graph.edges(node, data=True)
+            ),
             3,
         )
         for node in graph.nodes()
@@ -122,7 +119,10 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
 
     expected_influence = {
         node: round(
-            sum(float(data.get("weight", 0.0)) for _, _, data in graph.edges(node, data=True)),
+            sum(
+                float(data.get("weight", 0.0))
+                for _, _, data in graph.edges(node, data=True)
+            ),
             3,
         )
         for node in graph.nodes()
@@ -146,11 +146,15 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
             distance=1 / abs_weight,
         )
 
-    betweenness = nx.betweenness_centrality(
-        distance_graph,
-        weight="distance",
-        normalized=True,
-    ) if distance_graph.number_of_edges() > 0 else {node: 0.0 for node in graph.nodes()}
+    betweenness = (
+        nx.betweenness_centrality(
+            distance_graph,
+            weight="distance",
+            normalized=True,
+        )
+        if distance_graph.number_of_edges() > 0
+        else {node: 0.0 for node in graph.nodes()}
+    )
 
     rows = []
     for node in graph.nodes():
@@ -174,34 +178,27 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
 
 
 # --- Visualization ---------------------------------------------------------
-def color_for_category(category: str) -> str:
-    return CATEGORY_COLORS.get(category, "#8b5cf6")
-
-
-def edge_color_for_weight(weight: float) -> str:
-    return "#dc2626" if weight >= 0 else "#2563eb"
+def shape_for_category(category: str) -> str:
+    return {
+        "Diagnostic": "dot",
+        "Environnement": "square",
+        "Autre": "triangle",
+    }.get(category, "dot")
 
 
 def edge_width_for_weight(weight: float) -> float:
     abs_weight = abs(weight)
-    return 1.0 + (abs_weight * 6.0)
+    return 1.5 + (abs_weight * 6.0)
 
 
 def edge_opacity_for_weight(weight: float) -> float:
     abs_weight = abs(weight)
-    return 0.25 + (abs_weight * 0.75)
+    return 0.3 + (abs_weight * 0.7)
 
 
-def rgba_from_hex(hex_color: str, alpha: float) -> str:
-    hex_color = hex_color.lstrip("#")
-    if len(hex_color) != 6:
-        return f"rgba(107,114,128,{alpha})"
-
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-
-    return f"rgba({r},{g},{b},{alpha:.3f})"
+def rgba_from_gray(gray_value: int, alpha: float) -> str:
+    gray_value = max(0, min(255, gray_value))
+    return f"rgba({gray_value},{gray_value},{gray_value},{alpha:.3f})"
 
 
 def build_layout_map(layout_df: pd.DataFrame | None) -> dict[str, tuple[float, float]]:
@@ -257,18 +254,34 @@ def render_pyvis_graph(
     for node, attrs in graph.nodes(data=True):
         intensity = float(attrs.get("intensity", 1))
         category = attrs.get("category", "Autre")
-        color = color_for_category(category)
 
         node_kwargs = {
             "label": node,
-            "title": f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
-            "color": color,
+            "title": (
+                f"{node}"
+                f"<br>Catégorie : {category}"
+                f"<br>Intensité : {intensity}"
+            ),
+            "shape": shape_for_category(category),
             "size": 15 + (intensity * 3),
+            "color": {
+                "background": "#ffffff",
+                "border": "#111827",
+                "highlight": {
+                    "background": "#f3f4f6",
+                    "border": "#111827",
+                },
+                "hover": {
+                    "background": "#f9fafb",
+                    "border": "#111827",
+                },
+            },
+            "borderWidth": 2,
             "font": {
                 "size": 18,
                 "face": "arial",
                 "color": "#111827",
-                "strokeWidth": 3,
+                "strokeWidth": 4,
                 "strokeColor": "#ffffff",
                 "vadjust": -10,
             },
@@ -283,27 +296,24 @@ def render_pyvis_graph(
         net.add_node(node, **node_kwargs)
 
     for source, target, attrs in graph.edges(data=True):
-        weight = float(attrs.get("weight", 0.1))
+        weight = float(attrs.get("weight", 0.0))
         abs_weight = abs(weight)
-        edge_base_color = edge_color_for_weight(weight)
-        edge_color = rgba_from_hex(
-            edge_base_color,
-            edge_opacity_for_weight(weight),
-        )
-        relation_label = "Positive" if weight >= 0 else "Negative"
+        relation_label = "Positive" if weight >= 0 else "Négative"
 
         net.add_edge(
             source,
             target,
             value=max(abs_weight, 0.05) * 5,
             width=edge_width_for_weight(weight),
-            color=edge_color,
+            color=rgba_from_gray(80, edge_opacity_for_weight(weight)),
+            dashes=(weight < 0),
             title=(
-                f"{relation_label} relation"
-                f"<br>Weight: {weight:.2f}"
-                f"<br>Absolute strength: {abs_weight:.2f}"
+                f"Relation {relation_label.lower()}"
+                f"<br>Poids : {weight:.2f}"
+                f"<br>Force absolue : {abs_weight:.2f}"
+                f"<br>Style : {'pointillé' if weight < 0 else 'continu'}"
             ),
-            physics=False if has_fixed_layout else True,
+            physics=not has_fixed_layout,
             smooth=False,
         )
 
@@ -351,7 +361,11 @@ def render_pyvis_graph(
 
 
 # --- R analysis ------------------------------------------------------------
-def export_network_to_json(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame, path: str = "data/network_data.json") -> str:
+def export_network_to_json(
+    symptoms_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    path: str = "data/network_data.json",
+) -> str:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
     data = {
@@ -531,7 +545,8 @@ with right_col:
         },
     )
     st.caption(
-        "Poids négatif = protecteur/inhibiteur; poids positif = activant/aggravant."
+        "Poids négatif = relation protectrice / inhibitrice. "
+        "Poids positif = relation activante / aggravante."
     )
 
 # --- Data preparation ------------------------------------------------------
@@ -583,16 +598,23 @@ with action_col2:
         st.session_state["r_layout_df"] = None
         st.success("Résultats R réinitialisés.")
 
-legend_cols = st.columns(3)
-legend_cols[0].markdown("🔴 **Diagnostic**")
-legend_cols[1].markdown("🔵 **Environnement**")
-legend_cols[2].markdown("🟢 **Autre**")
-
 graph_col, metrics_col = st.columns([2, 1])
 
 with graph_col:
     st.subheader("Réseau")
-    st.caption("Arête rouge = relation aggravante/activante. Arête bleue = relation inhibitrice/protectrice.")
+    st.caption(
+        "La forme des nœuds représente la catégorie. "
+        "La taille des nœuds représente l’intensité. "
+        "L’épaisseur des arêtes représente la force absolue. "
+        "Les arêtes continues sont positives ; les arêtes pointillées sont négatives."
+    )
+
+    legend_cols = st.columns(4)
+    legend_cols[0].markdown("● **Diagnostic**")
+    legend_cols[1].markdown("■ **Environnement**")
+    legend_cols[2].markdown("▲ **Autre**")
+    legend_cols[3].markdown("━ / ┄ **Continu = positif, pointillé = négatif**")
+
     if graph.number_of_nodes() == 0:
         st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
     else:
@@ -610,7 +632,7 @@ with metrics_col:
     r_metrics_df = st.session_state.get("r_metrics_df")
 
     if r_metrics_df is not None and not r_metrics_df.empty:
-        st.caption("Résultats calculés par R (igraph)")
+        st.caption("Résultats calculés par R")
         st.dataframe(r_metrics_df, width="stretch", hide_index=True)
 
         top_symptom = r_metrics_df.iloc[0]["symptom"]
@@ -618,7 +640,7 @@ with metrics_col:
     elif metrics_df.empty:
         st.info("Aucune métrique disponible.")
     else:
-        st.caption("Résultats calculés localement en Python")
+        st.caption("Aperçu local calculé en Python")
         st.dataframe(metrics_df, width="stretch", hide_index=True)
 
         top_symptom = metrics_df.iloc[0]["symptom"]

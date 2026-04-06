@@ -1,5 +1,6 @@
 library(jsonlite)
 library(igraph)
+library(qgraph)
 
 input_path <- "data/network_data.json"
 output_path <- "data/r_results.json"
@@ -150,14 +151,27 @@ metrics <- metrics[order(
   metrics$symptom
 ), ]
 
-edges_for_layout <- edges[edges$abs_weight > 0, c("source", "target", "abs_weight")]
-colnames(edges_for_layout) <- c("source", "target", "weight")
+node_names <- as.character(nodes$label)
 
-g_layout <- graph_from_data_frame(
-  d = edges_for_layout,
-  vertices = nodes,
-  directed = FALSE
+layout_matrix_input <- matrix(
+  0,
+  nrow = length(node_names),
+  ncol = length(node_names),
+  dimnames = list(node_names, node_names)
 )
+
+edges_for_layout <- edges[edges$abs_weight > 0, c("source", "target", "abs_weight")]
+
+if (nrow(edges_for_layout) > 0) {
+  for (i in seq_len(nrow(edges_for_layout))) {
+    source_name <- as.character(edges_for_layout$source[i])
+    target_name <- as.character(edges_for_layout$target[i])
+    weight_value <- as.numeric(edges_for_layout$abs_weight[i])
+
+    layout_matrix_input[source_name, target_name] <- weight_value
+    layout_matrix_input[target_name, source_name] <- weight_value
+  }
+}
 
 # --- Build layout output ----------------------------------------------------
 if (vcount(g_signed) == 1) {
@@ -167,7 +181,7 @@ if (vcount(g_signed) == 1) {
     y = 0,
     stringsAsFactors = FALSE
   )
-} else if (ecount(g_layout) == 0) {
+} else if (sum(layout_matrix_input) == 0) {
   layout <- data.frame(
     symptom = V(g_signed)$name,
     x = 0,
@@ -175,13 +189,20 @@ if (vcount(g_signed) == 1) {
     stringsAsFactors = FALSE
   )
 } else {
-  layout_matrix <- layout_with_fr(
-    g_layout,
-    weights = E(g_layout)$weight
+  qgraph_object <- qgraph(
+    layout_matrix_input,
+    layout = "spring",
+    DoNotPlot = TRUE
   )
 
+  layout_matrix <- qgraph_object$layout
+
+  if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
+    stop("qgraph returned an invalid layout matrix.")
+  }
+
   layout <- data.frame(
-    symptom = V(g_layout)$name,
+    symptom = node_names,
     x = round(layout_matrix[, 1], 6),
     y = round(layout_matrix[, 2], 6),
     stringsAsFactors = FALSE

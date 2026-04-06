@@ -450,6 +450,14 @@ def load_r_analysis_results(
         return None, None, None
 
 
+def build_network_snapshot(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> str:
+    payload = {
+        "nodes": symptoms_df.to_dict(orient="records"),
+        "edges": edges_df.to_dict(orient="records"),
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
 def run_r_analysis() -> bool:
     try:
         result = subprocess.run(
@@ -556,9 +564,6 @@ symptoms_df = normalize_symptoms_df(pd.DataFrame(symptoms_df))
 valid_labels = set(symptoms_df["label"].tolist())
 edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 
-graph = build_graph(symptoms_df, edges_df)
-metrics_df = compute_metrics(graph)
-
 if "r_metrics_df" not in st.session_state:
     st.session_state["r_metrics_df"] = None
 
@@ -567,6 +572,24 @@ if "r_layout_df" not in st.session_state:
 
 if "r_layout_metadata" not in st.session_state:
     st.session_state["r_layout_metadata"] = None
+
+if "last_analyzed_network_snapshot" not in st.session_state:
+    st.session_state["last_analyzed_network_snapshot"] = None
+
+graph = build_graph(symptoms_df, edges_df)
+
+# --- Detect network modifications ------------------------------------------
+current_snapshot = build_network_snapshot(symptoms_df, edges_df)
+
+if (
+    st.session_state["last_analyzed_network_snapshot"] is not None
+    and st.session_state["last_analyzed_network_snapshot"] != current_snapshot
+):
+    st.session_state["r_metrics_df"] = None
+    st.session_state["r_layout_df"] = None
+    st.session_state["r_layout_metadata"] = None
+
+metrics_df = compute_metrics(graph)
 
 # --- Results ---------------------------------------------------------------
 st.divider()
@@ -589,6 +612,13 @@ with action_col1:
         success = run_r_analysis()
 
         if success:
+            st.session_state["last_analyzed_network_snapshot"] = (
+                build_network_snapshot(
+                    symptoms_df,
+                    edges_df,
+                )
+            )
+             
             r_metrics_df, r_layout_df, r_layout_metadata = load_r_analysis_results()
 
             if r_metrics_df is not None:
@@ -604,6 +634,7 @@ with action_col2:
         st.session_state["r_metrics_df"] = None
         st.session_state["r_layout_df"] = None
         st.session_state["r_layout_metadata"] = None
+        st.session_state["last_analyzed_network_snapshot"] = None
         st.success("Résultats R réinitialisés.")
 
 graph_col, metrics_col = st.columns([2, 1])
@@ -612,8 +643,8 @@ with graph_col:
     st.subheader("Réseau")
     st.caption(
         "La forme des nœuds représente la catégorie. "
-        "La taille des nœuds représente l’intensité. "
-        "L’épaisseur des arêtes représente la force absolue. "
+        "La taille des nœuds représente l'intensité. "
+        "L'épaisseur des arêtes représente la force absolue. "
         "Les arêtes continues sont positives ; les arêtes pointillées sont négatives."
     )
 
@@ -624,7 +655,7 @@ with graph_col:
     legend_cols[3].markdown("━ / ┄ **Continu = positif, pointillé = négatif**")
 
     if r_metrics_df is None:
-        st.info("Lancez l’analyse R pour afficher le réseau.")
+        st.info("Lancez l'analyse R pour afficher le réseau.")
     else:
         r_layout_df = st.session_state.get("r_layout_df")
         html = render_pyvis_graph(graph, layout_df=r_layout_df)

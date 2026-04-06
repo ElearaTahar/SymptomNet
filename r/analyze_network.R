@@ -1,10 +1,7 @@
 library(jsonlite)
 library(igraph)
 
-if (!requireNamespace("qgraph", quietly = TRUE)) {
-  install.packages("qgraph", repos = "https://cloud.r-project.org")
-}
-library(qgraph)
+qgraph_available <- requireNamespace("qgraph", quietly = TRUE)
 
 input_path <- "data/network_data.json"
 output_path <- "data/r_results.json"
@@ -213,34 +210,44 @@ if (vcount(g_signed) == 1) {
   )
   layout_engine <- "empty"
 } else {
-  qgraph_result <- tryCatch(
-    {
-      qgraph_object <- qgraph(
-        layout_matrix_input,
-        layout = "spring",
-        DoNotPlot = TRUE
-      )
+  qgraph_result <- NULL
 
-      layout_matrix <- qgraph_object$layout
+  if (qgraph_available) {
+    qgraph_result <- tryCatch(
+      {
+        qgraph_object <- qgraph::qgraph(
+          layout_matrix_input,
+          layout = "spring",
+          DoNotPlot = TRUE
+        )
 
-      if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
-        stop("qgraph returned an invalid layout matrix.")
+        layout_matrix <- qgraph_object$layout
+
+        if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
+          stop("qgraph returned an invalid layout matrix.")
+        }
+
+        list(
+          success = TRUE,
+          layout_matrix = layout_matrix,
+          warning = NA_character_
+        )
+      },
+      error = function(e) {
+        list(
+          success = FALSE,
+          layout_matrix = NULL,
+          warning = conditionMessage(e)
+        )
       }
-
-      list(
-        success = TRUE,
-        layout_matrix = layout_matrix,
-        warning = NA_character_
-      )
-    },
-    error = function(e) {
-      list(
-        success = FALSE,
-        layout_matrix = NULL,
-        warning = conditionMessage(e)
-      )
-    }
-  )
+    )
+  } else {
+    qgraph_result <- list(
+      success = FALSE,
+      layout_matrix = NULL,
+      warning = "qgraph package is not available in the runtime environment."
+    )
+  }
 
   if (isTRUE(qgraph_result$success)) {
     layout_matrix <- qgraph_result$layout_matrix

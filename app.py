@@ -571,12 +571,14 @@ if "r_layout_metadata" not in st.session_state:
 # --- Results ---------------------------------------------------------------
 st.divider()
 
+r_metrics_df = st.session_state.get("r_metrics_df")
+
 kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
 kpi_col1.metric("Nombre de symptômes", graph.number_of_nodes())
 kpi_col2.metric("Nombre de relations", graph.number_of_edges())
 kpi_col3.metric(
     "Symptôme le plus central",
-    metrics_df.iloc[0]["symptom"] if not metrics_df.empty else "-",
+     r_metrics_df.iloc[0]["symptom"] if r_metrics_df is not None and not r_metrics_df.empty else "-",
 )
 
 action_col1, action_col2 = st.columns([1, 1])
@@ -584,7 +586,6 @@ action_col1, action_col2 = st.columns([1, 1])
 with action_col1:
     if st.button("Analyser le réseau avec R"):
         export_network_to_json(symptoms_df, edges_df)
-
         success = run_r_analysis()
 
         if success:
@@ -622,8 +623,8 @@ with graph_col:
     legend_cols[2].markdown("▲ **Autre**")
     legend_cols[3].markdown("━ / ┄ **Continu = positif, pointillé = négatif**")
 
-    if graph.number_of_nodes() == 0:
-        st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
+    if r_metrics_df is None:
+        st.info("Lancez l’analyse R pour afficher le réseau.")
     else:
         r_layout_df = st.session_state.get("r_layout_df")
         html = render_pyvis_graph(graph, layout_df=r_layout_df)
@@ -641,10 +642,7 @@ with graph_col:
                 st.caption(layout_label)
 
             if layout_warning:
-                st.caption(
-                    "Information de rendu : "
-                    f"{layout_warning}"
-                )
+                st.caption(f"Information de rendu : {layout_warning}")
 
         tmp_path = Path("data/network_preview.html")
         tmp_path.write_text(html, encoding="utf-8")
@@ -654,23 +652,11 @@ with graph_col:
 with metrics_col:
     st.subheader("Centralités")
 
-    r_metrics_df = st.session_state.get("r_metrics_df")
-
     if r_metrics_df is not None and not r_metrics_df.empty:
         st.caption("Résultats calculés par R")
         st.dataframe(r_metrics_df, width="stretch", hide_index=True)
 
         top_symptom = r_metrics_df.iloc[0]["symptom"]
         st.write(f"Le symptôme le plus central selon R est **{top_symptom}**.")
-    elif metrics_df.empty:
-        st.info("Aucune métrique disponible.")
     else:
-        st.caption("Aperçu local calculé en Python")
-        st.dataframe(metrics_df, width="stretch", hide_index=True)
-
-        top_symptom = metrics_df.iloc[0]["symptom"]
-        st.write(f"Le symptôme le plus central actuellement est **{top_symptom}**.")
-
-        if len(metrics_df) >= 3:
-            top_3 = ", ".join(metrics_df.head(3)["symptom"].tolist())
-            st.write(f"Top 3 actuel : **{top_3}**.")
+        st.info("Les résultats seront affichés ici après l'analyse R.")

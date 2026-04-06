@@ -150,12 +150,31 @@ metrics <- metrics[order(
   metrics$symptom
 ), ]
 
-# Layout is intentionally empty for now.
+# --- Build layout output ----------------------------------------------------
+if (vcount(g_signed) == 1) {
+  layout <- data.frame(
+    symptom = V(g_signed)$name,
+    x = 0,
+    y = 0,
+    stringsAsFactors = FALSE
+  )
+} else {
+  layout_matrix <- layout_with_fr(g_signed)
+
+  layout <- data.frame(
+    symptom = V(g_signed)$name,
+    x = round(layout_matrix[, 1], 6),
+    y = round(layout_matrix[, 2], 6),
+    stringsAsFactors = FALSE
+  )
+}
+
+# --- Build structured result ------------------------------------------------
 result <- list(
   metrics = metrics,
-  layout = list()
+  layout = layout
 )
 
 write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
 
-cat("Network analysis complete. Structured JSON results written.\n")
+cat("Network analysis complete. Structured JSON results with layout written.\n")

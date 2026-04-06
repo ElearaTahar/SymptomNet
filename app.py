@@ -178,17 +178,45 @@ def color_for_category(category: str) -> str:
     return CATEGORY_COLORS.get(category, "#8b5cf6")
 
 
+def build_layout_map(layout_df: pd.DataFrame | None) -> dict[str, tuple[float, float]]:
+    if layout_df is None or layout_df.empty:
+        return {}
+
+    required_columns = {"symptom", "x", "y"}
+    if not required_columns.issubset(layout_df.columns):
+        return {}
+
+    df = layout_df.copy()
+    df["symptom"] = df["symptom"].fillna("").astype(str).str.strip()
+    df = df[df["symptom"] != ""].reset_index(drop=True)
+
+    if df.empty:
+        return {}
+
+    df["x"] = pd.to_numeric(df["x"], errors="coerce").fillna(0.0)
+    df["y"] = pd.to_numeric(df["y"], errors="coerce").fillna(0.0)
+
+    df["x"] = df["x"] - df["x"].mean()
+    df["y"] = df["y"] - df["y"].mean()
+
+    max_abs = max(df["x"].abs().max(), df["y"].abs().max(), 1.0)
+    target_radius = 250.0
+
+    df["x"] = (df["x"] / max_abs) * target_radius
+    df["y"] = (df["y"] / max_abs) * target_radius
+
+    return {
+        row.symptom: (float(row.x), float(row.y))
+        for row in df.itertuples(index=False)
+    }
+
+
 def render_pyvis_graph(
     graph: nx.Graph,
     layout_df: pd.DataFrame | None = None,
 ) -> str:
-    layout_map: dict[str, tuple[float, float]] = {}
-
-    if layout_df is not None and not layout_df.empty:
-        required_columns = {"symptom", "x", "y"}
-        if required_columns.issubset(layout_df.columns):
-            for row in layout_df.itertuples(index=False):
-                layout_map[str(row.symptom)] = (float(row.x), float(row.y))
+    layout_map = build_layout_map(layout_df)
+    has_fixed_layout = len(layout_map) > 0
 
     net = Network(
         height="650px",
@@ -197,7 +225,7 @@ def render_pyvis_graph(
         font_color="#111827",
     )
 
-    if layout_df is None or layout_df.empty:
+    if not has_fixed_layout:
         net.barnes_hut()
 
     for node, attrs in graph.nodes(data=True):
@@ -210,12 +238,20 @@ def render_pyvis_graph(
             "title": f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
             "color": color,
             "size": 15 + (intensity * 3),
+            "font": {
+                "size": 18,
+                "face": "arial",
+                "color": "#111827",
+                "strokeWidth": 3,
+                "strokeColor": "#ffffff",
+                "vadjust": -10,
+            },
         }
 
         if node in layout_map:
             x, y = layout_map[node]
-            node_kwargs["x"] = x * 500
-            node_kwargs["y"] = y * 500
+            node_kwargs["x"] = x
+            node_kwargs["y"] = y
             node_kwargs["physics"] = False
 
         net.add_node(node, **node_kwargs)
@@ -229,8 +265,6 @@ def render_pyvis_graph(
             value=weight * 5,
             title=f"Poids: {weight}",
         )
-
-        has_fixed_layout = len(layout_map) > 0
 
     if has_fixed_layout:
         net.set_options(

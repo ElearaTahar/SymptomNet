@@ -256,20 +256,28 @@ def export_network_to_json(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame, pa
 def load_r_results(path: str = "data/r_results.json") -> pd.DataFrame | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            payload = json.load(f)
 
-        df = pd.DataFrame(data)
+        if isinstance(payload, list):
+            df = pd.DataFrame(payload)
+        elif isinstance(payload, dict):
+            df = pd.DataFrame(payload.get("metrics", []))
+        else:
+            return None
 
         if df.empty:
             return df
 
-        numeric_columns = ["strength", "closeness", "betweenness"]
+        numeric_columns = ["strength", "closeness", "betweenness", "expected_influence"]
         for col in numeric_columns:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-        sort_columns = [col for col in ["strength", "closeness", "betweenness", "symptom"] if col in df.columns]
-        ascending = [False, False, False, True][: len(sort_columns)]
+        sort_columns = [
+            col for col in ["expected_influence", "strength", "closeness", "betweenness", "symptom"]
+            if col in df.columns
+        ]
+        ascending = [False, False, False, False, True][:len(sort_columns)]
 
         if sort_columns:
             df = df.sort_values(by=sort_columns, ascending=ascending).reset_index(drop=True)

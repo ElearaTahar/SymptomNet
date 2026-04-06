@@ -10,24 +10,43 @@ data <- fromJSON(input_path)
 nodes <- data$nodes
 edges <- data$edges
 
+write_empty_result <- function(nodes, output_path, message_text) {
+  metrics <- data.frame(
+    symptom = as.character(nodes$label),
+    strength = rep(0, nrow(nodes)),
+    closeness = rep(0, nrow(nodes)),
+    betweenness = rep(0, nrow(nodes)),
+    expected_influence = rep(0, nrow(nodes)),
+    stringsAsFactors = FALSE
+  )
+
+  result <- list(
+    metrics = metrics,
+    layout = list()
+  )
+
+  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
+  cat(message_text, "\n")
+}
+
 # --- Safety checks ----------------------------------------------------------
 if (is.null(nodes) || nrow(nodes) == 0) {
-  write_json(data.frame(), output_path, pretty = TRUE, auto_unbox = TRUE)
+  result <- list(
+    metrics = list(),
+    layout = list()
+  )
+
+  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
   cat("No nodes provided. Empty results written.\n")
   quit(save = "no")
 }
 
 if (is.null(edges) || nrow(edges) == 0) {
-  output <- data.frame(
-    symptom = as.character(nodes$label),
-    strength = rep(0, nrow(nodes)),
-    closeness = rep(0, nrow(nodes)),
-    betweenness = rep(0, nrow(nodes)),
-    expected_influence = rep(0, nrow(nodes))
+  write_empty_result(
+    nodes,
+    output_path,
+    "No edges provided. Empty centrality results written."
   )
-
-  write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
-  cat("No edges provided. Empty centrality results written.\n")
   quit(save = "no")
 }
 
@@ -45,16 +64,11 @@ edges <- edges[
 ]
 
 if (nrow(edges) == 0) {
-  output <- data.frame(
-    symptom = as.character(nodes$label),
-    strength = rep(0, nrow(nodes)),
-    closeness = rep(0, nrow(nodes)),
-    betweenness = rep(0, nrow(nodes)),
-    expected_influence = rep(0, nrow(nodes))
+  write_empty_result(
+    nodes,
+    output_path,
+    "No valid edges after cleaning."
   )
-
-  write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
-  cat("No valid edges after cleaning.\n")
   quit(save = "no")
 }
 
@@ -84,12 +98,10 @@ g_paths <- graph_from_data_frame(
 )
 
 # --- Compute centralities ---------------------------------------------------
-
-# Signed weighted sum
 expected_influence_values <- strength(g_signed, weights = E(g_signed)$weight)
 
-# Absolute weighted sum
-strength_values <- strength(g_signed, weights = abs(E(g_signed)$weight))
+abs_weights <- abs(E(g_signed)$weight)
+strength_values <- strength(g_signed, weights = abs_weights)
 
 if (ecount(g_paths) > 0) {
   closeness_values <- closeness(
@@ -118,8 +130,8 @@ if (ecount(g_paths) > 0) {
 closeness_values[!is.finite(closeness_values)] <- 0
 betweenness_values[!is.finite(betweenness_values)] <- 0
 
-# --- Build output -----------------------------------------------------------
-output <- data.frame(
+# --- Build metrics output ---------------------------------------------------
+metrics <- data.frame(
   symptom = V(g_signed)$name,
   strength = round(as.numeric(strength_values[V(g_signed)$name]), 3),
   closeness = round(as.numeric(closeness_values[V(g_signed)$name]), 3),
@@ -128,16 +140,22 @@ output <- data.frame(
   stringsAsFactors = FALSE
 )
 
-output[is.na(output)] <- 0
+metrics[is.na(metrics)] <- 0
 
-output <- output[order(
-  -output$expected_influence,
-  -output$strength,
-  -output$closeness,
-  -output$betweenness,
-  output$symptom
+metrics <- metrics[order(
+  -metrics$expected_influence,
+  -metrics$strength,
+  -metrics$closeness,
+  -metrics$betweenness,
+  metrics$symptom
 ), ]
 
-write_json(output, output_path, pretty = TRUE, auto_unbox = TRUE)
+# Layout is intentionally empty for now.
+result <- list(
+  metrics = metrics,
+  layout = list()
+)
 
-cat("Network analysis complete. Results written to JSON.\n")
+write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
+
+cat("Network analysis complete. Structured JSON results written.\n")

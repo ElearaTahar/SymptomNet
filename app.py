@@ -381,7 +381,7 @@ def export_network_to_json(
 
 def load_r_analysis_results(
     path: str = "data/r_results.json",
-) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict | None]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
@@ -389,11 +389,13 @@ def load_r_analysis_results(
         if isinstance(payload, list):
             metrics_df = pd.DataFrame(payload)
             layout_df = None
+            metadata = None
         elif isinstance(payload, dict):
             metrics_df = pd.DataFrame(payload.get("metrics", []))
             layout_df = pd.DataFrame(payload.get("layout", []))
+            metadata = payload.get("metadata")
         else:
-            return None, None
+            return None, None, None
 
         if metrics_df is not None and not metrics_df.empty:
             numeric_columns = [
@@ -440,12 +442,12 @@ def load_r_analysis_results(
                 )
                 layout_df = layout_df[layout_df["symptom"] != ""].reset_index(drop=True)
 
-        return metrics_df, layout_df
+        return metrics_df, layout_df, metadata
 
     except FileNotFoundError:
-        return None, None
+        return None, None, None
     except json.JSONDecodeError:
-        return None, None
+        return None, None, None
 
 
 def run_r_analysis() -> bool:
@@ -563,6 +565,9 @@ if "r_metrics_df" not in st.session_state:
 if "r_layout_df" not in st.session_state:
     st.session_state["r_layout_df"] = None
 
+if "r_layout_metadata" not in st.session_state:
+    st.session_state["r_layout_metadata"] = None
+
 # --- Results ---------------------------------------------------------------
 st.divider()
 
@@ -583,11 +588,12 @@ with action_col1:
         success = run_r_analysis()
 
         if success:
-            r_metrics_df, r_layout_df = load_r_analysis_results()
+            r_metrics_df, r_layout_df, r_layout_metadata = load_r_analysis_results()
 
             if r_metrics_df is not None:
                 st.session_state["r_metrics_df"] = r_metrics_df
                 st.session_state["r_layout_df"] = r_layout_df
+                st.session_state["r_layout_metadata"] = r_layout_metadata
                 st.success("Analyse R terminée avec succès.")
             else:
                 st.error("Le fichier de résultats R est introuvable ou vide.")
@@ -596,6 +602,7 @@ with action_col2:
     if st.button("Réinitialiser les résultats R"):
         st.session_state["r_metrics_df"] = None
         st.session_state["r_layout_df"] = None
+        st.session_state["r_layout_metadata"] = None
         st.success("Résultats R réinitialisés.")
 
 graph_col, metrics_col = st.columns([2, 1])
@@ -620,6 +627,24 @@ with graph_col:
     else:
         r_layout_df = st.session_state.get("r_layout_df")
         html = render_pyvis_graph(graph, layout_df=r_layout_df)
+
+        r_layout_metadata = st.session_state.get("r_layout_metadata")
+        if isinstance(r_layout_metadata, dict):
+            layout_engine = r_layout_metadata.get("layout_engine")
+            fallback_used = r_layout_metadata.get("layout_fallback_used")
+            layout_warning = r_layout_metadata.get("layout_warning")
+
+            if layout_engine:
+                layout_label = f"Layout utilisé : {layout_engine}"
+                if fallback_used:
+                    layout_label += " (fallback)"
+                st.caption(layout_label)
+
+            if layout_warning:
+                st.caption(
+                    "Information de rendu : "
+                    f"{layout_warning}"
+                )
 
         tmp_path = Path("data/network_preview.html")
         tmp_path.write_text(html, encoding="utf-8")

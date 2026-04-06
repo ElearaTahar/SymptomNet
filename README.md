@@ -9,7 +9,7 @@ It allows users to:
 - compute centrality metrics using R
 - generate a reproducible network layout
 
-This project is an early prototype intended for experimentation and research exploration.
+This project is an early prototype intended for experimentation and research exploration : https://symptom-net.streamlit.app/
 
 ---
 

@@ -23,10 +23,15 @@ write_empty_result <- function(nodes, output_path, message_text) {
 
   result <- list(
     metrics = metrics,
-    layout = list()
+    layout = list(),
+    metadata = list(
+      layout_engine = NA,
+      layout_fallback_used = FALSE,
+      layout_warning = NA
+    )
   )
 
-  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
+  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE, null = "null")
   cat(message_text, "\n")
 }
 
@@ -34,10 +39,15 @@ write_empty_result <- function(nodes, output_path, message_text) {
 if (is.null(nodes) || nrow(nodes) == 0) {
   result <- list(
     metrics = list(),
-    layout = list()
+    layout = list(),
+    metadata = list(
+      layout_engine = NA,
+      layout_fallback_used = FALSE,
+      layout_warning = NA
+    )
   )
 
-  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
+  write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE, null = "null")
   cat("No nodes provided. Empty results written.\n")
   quit(save = "no")
 }
@@ -90,7 +100,10 @@ g_signed <- graph_from_data_frame(
   directed = FALSE
 )
 
-edges_for_paths <- edges[!is.na(edges$distance), c("source", "target", "weight", "distance")]
+edges_for_paths <- edges[
+  !is.na(edges$distance),
+  c("source", "target", "weight", "distance")
+]
 
 g_paths <- graph_from_data_frame(
   d = edges_for_paths,
@@ -151,6 +164,7 @@ metrics <- metrics[order(
   metrics$symptom
 ), ]
 
+# --- Prepare layout inputs --------------------------------------------------
 node_names <- as.character(nodes$label)
 
 layout_matrix_input <- matrix(
@@ -174,6 +188,10 @@ if (nrow(edges_for_layout) > 0) {
 }
 
 # --- Build layout output ----------------------------------------------------
+layout_engine <- NA_character_
+layout_fallback_used <- FALSE
+layout_warning <- NA_character_
+
 if (vcount(g_signed) == 1) {
   layout <- data.frame(
     symptom = V(g_signed)$name,
@@ -181,6 +199,7 @@ if (vcount(g_signed) == 1) {
     y = 0,
     stringsAsFactors = FALSE
   )
+  layout_engine <- "trivial"
 } else if (sum(layout_matrix_input) == 0) {
   layout <- data.frame(
     symptom = V(g_signed)$name,
@@ -188,17 +207,65 @@ if (vcount(g_signed) == 1) {
     y = 0,
     stringsAsFactors = FALSE
   )
+  layout_engine <- "empty"
 } else {
-  qgraph_object <- qgraph(
-    layout_matrix_input,
-    layout = "spring",
-    DoNotPlot = TRUE
+  qgraph_result <- tryCatch(
+    {
+      qgraph_object <- qgraph(
+        layout_matrix_input,
+        layout = "spring",
+        DoNotPlot = TRUE
+      )
+
+      layout_matrix <- qgraph_object$layout
+
+      if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
+        stop("qgraph returned an invalid layout matrix.")
+      }
+
+      list(
+        success = TRUE,
+        layout_matrix = layout_matrix,
+        warning = NA_character_
+      )
+    },
+    error = function(e) {
+      list(
+        success = FALSE,
+        layout_matrix = NULL,
+        warning = conditionMessage(e)
+      )
+    }
   )
 
-  layout_matrix <- qgraph_object$layout
+  if (isTRUE(qgraph_result$success)) {
+    layout_matrix <- qgraph_result$layout_matrix
+    layout_engine <- "qgraph"
+  } else {
+    edges_for_igraph_layout <- edges[
+      edges$abs_weight > 0,
+      c("source", "target", "abs_weight")
+    ]
+    colnames(edges_for_igraph_layout) <- c("source", "target", "weight")
 
-  if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
-    stop("qgraph returned an invalid layout matrix.")
+    g_layout <- graph_from_data_frame(
+      d = edges_for_igraph_layout,
+      vertices = nodes,
+      directed = FALSE
+    )
+
+    layout_matrix <- layout_with_fr(
+      g_layout,
+      weights = E(g_layout)$weight
+    )
+
+    if (is.null(layout_matrix) || nrow(layout_matrix) != length(node_names)) {
+      stop("igraph fallback returned an invalid layout matrix.")
+    }
+
+    layout_engine <- "igraph"
+    layout_fallback_used <- TRUE
+    layout_warning <- qgraph_result$warning
   }
 
   layout <- data.frame(
@@ -212,9 +279,14 @@ if (vcount(g_signed) == 1) {
 # --- Build structured result ------------------------------------------------
 result <- list(
   metrics = metrics,
-  layout = layout
+  layout = layout,
+  metadata = list(
+    layout_engine = layout_engine,
+    layout_fallback_used = layout_fallback_used,
+    layout_warning = layout_warning
+  )
 )
 
-write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE)
+write_json(result, output_path, pretty = TRUE, auto_unbox = TRUE, null = "null")
 
 cat("Network analysis complete. Structured JSON results with layout written.\n")

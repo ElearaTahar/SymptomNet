@@ -594,14 +594,16 @@ metrics_df = compute_metrics(graph)
 # --- Results ---------------------------------------------------------------
 st.divider()
 
-r_metrics_df = st.session_state.get("r_metrics_df")
-
 kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
 kpi_col1.metric("Nombre de symptômes", graph.number_of_nodes())
 kpi_col2.metric("Nombre de relations", graph.number_of_edges())
 kpi_col3.metric(
     "Symptôme le plus central",
-     r_metrics_df.iloc[0]["symptom"] if r_metrics_df is not None and not r_metrics_df.empty else "-",
+    (
+        st.session_state["r_metrics_df"].iloc[0]["symptom"]
+        if st.session_state["r_metrics_df"] is not None and not st.session_state["r_metrics_df"].empty
+        else "-"
+    ),
 )
 
 action_col1, action_col2 = st.columns([1, 1])
@@ -636,6 +638,11 @@ with action_col2:
         st.session_state["r_layout_metadata"] = None
         st.session_state["last_analyzed_network_snapshot"] = None
         st.success("Résultats R réinitialisés.")
+        st.rerun()
+
+r_metrics_df = st.session_state.get("r_metrics_df")
+r_layout_df = st.session_state.get("r_layout_df")
+r_layout_metadata = st.session_state.get("r_layout_metadata")
 
 graph_col, metrics_col = st.columns([2, 1])
 
@@ -657,10 +664,8 @@ with graph_col:
     if r_metrics_df is None:
         st.info("Lancez l'analyse R pour afficher le réseau.")
     else:
-        r_layout_df = st.session_state.get("r_layout_df")
         html = render_pyvis_graph(graph, layout_df=r_layout_df)
 
-        r_layout_metadata = st.session_state.get("r_layout_metadata")
         if isinstance(r_layout_metadata, dict):
             layout_engine = r_layout_metadata.get("layout_engine")
             fallback_used = r_layout_metadata.get("layout_fallback_used")

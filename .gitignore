@@ -24,8 +24,17 @@ Thumbs.db
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
 
-# VSCode settings (optionnel)
+# VSCode settings
 .vscode/
 
 # Mac/Linux temp
 *.swp
+
+# Runtime data
+data/*
+!data/.gitkeep
+
+# R temporary files
+.Rhistory
+.RData
+.Rproj.user/

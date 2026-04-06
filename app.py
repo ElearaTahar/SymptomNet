@@ -1,3 +1,5 @@
+import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -8,12 +10,6 @@ from pyvis.network import Network
 
 
 CATEGORY_OPTIONS = ["Diagnostic", "Environnement", "Autre"]
-
-CATEGORY_COLORS = {
-    "Diagnostic": "#ef4444",
-    "Environnement": "#3b82f6",
-    "Autre": "#10b981",
-}
 
 DEFAULT_SYMPTOMS = pd.DataFrame(
     [
@@ -61,8 +57,8 @@ def normalize_edges_df(df: pd.DataFrame, valid_labels: set[str]) -> pd.DataFrame
     df["source"] = df["source"].fillna("").astype(str).str.strip()
     df["target"] = df["target"].fillna("").astype(str).str.strip()
 
-    df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.1)
-    df["weight"] = df["weight"].clip(lower=0.1, upper=1.0)
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0)
+    df["weight"] = df["weight"].clip(lower=-1.0, upper=1.0)
 
     df = df[
         (df["source"] != "")
@@ -99,12 +95,66 @@ def build_graph(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> nx.Graph:
 def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
     if graph.number_of_nodes() == 0:
         return pd.DataFrame(
-            columns=["symptom", "degree", "weighted_degree", "betweenness"]
+            columns=[
+                "symptom",
+                "degree",
+                "strength_abs",
+                "expected_influence",
+                "betweenness",
+            ]
         )
 
     degree = dict(graph.degree())
-    weighted_degree = dict(graph.degree(weight="weight"))
-    betweenness = nx.betweenness_centrality(graph, weight="weight", normalized=True)
+
+    strength_abs = {
+        node: round(
+            sum(
+                abs(float(data.get("weight", 0.0)))
+                for _, _, data in graph.edges(node, data=True)
+            ),
+            3,
+        )
+        for node in graph.nodes()
+    }
+
+    expected_influence = {
+        node: round(
+            sum(
+                float(data.get("weight", 0.0))
+                for _, _, data in graph.edges(node, data=True)
+            ),
+            3,
+        )
+        for node in graph.nodes()
+    }
+
+    distance_graph = nx.Graph()
+    for node, attrs in graph.nodes(data=True):
+        distance_graph.add_node(node, **attrs)
+
+    for source, target, attrs in graph.edges(data=True):
+        weight = float(attrs.get("weight", 0.0))
+        abs_weight = abs(weight)
+
+        if abs_weight == 0:
+            continue
+
+        distance_graph.add_edge(
+            source,
+            target,
+            weight=weight,
+            distance=1 / abs_weight,
+        )
+
+    betweenness = (
+        nx.betweenness_centrality(
+            distance_graph,
+            weight="distance",
+            normalized=True,
+        )
+        if distance_graph.number_of_edges() > 0
+        else {node: 0.0 for node in graph.nodes()}
+    )
 
     rows = []
     for node in graph.nodes():
@@ -112,26 +162,85 @@ def compute_metrics(graph: nx.Graph) -> pd.DataFrame:
             {
                 "symptom": node,
                 "degree": degree.get(node, 0),
-                "weighted_degree": round(weighted_degree.get(node, 0.0), 3),
+                "strength_abs": strength_abs.get(node, 0.0),
+                "expected_influence": expected_influence.get(node, 0.0),
                 "betweenness": round(betweenness.get(node, 0.0), 3),
             }
         )
 
     metrics_df = pd.DataFrame(rows)
     metrics_df = metrics_df.sort_values(
-        by=["weighted_degree", "betweenness", "degree", "symptom"],
-        ascending=[False, False, False, True],
+        by=["expected_influence", "strength_abs", "betweenness", "degree", "symptom"],
+        ascending=[False, False, False, False, True],
     ).reset_index(drop=True)
 
     return metrics_df
 
 
 # --- Visualization ---------------------------------------------------------
-def color_for_category(category: str) -> str:
-    return CATEGORY_COLORS.get(category, "#8b5cf6")
+def shape_for_category(category: str) -> str:
+    return {
+        "Diagnostic": "dot",
+        "Environnement": "square",
+        "Autre": "triangle",
+    }.get(category, "dot")
 
 
-def render_pyvis_graph(graph: nx.Graph) -> str:
+def edge_width_for_weight(weight: float) -> float:
+    abs_weight = abs(weight)
+    return 1.5 + (abs_weight * 6.0)
+
+
+def edge_opacity_for_weight(weight: float) -> float:
+    abs_weight = abs(weight)
+    return 0.3 + (abs_weight * 0.7)
+
+
+def rgba_from_gray(gray_value: int, alpha: float) -> str:
+    gray_value = max(0, min(255, gray_value))
+    return f"rgba({gray_value},{gray_value},{gray_value},{alpha:.3f})"
+
+
+def build_layout_map(layout_df: pd.DataFrame | None) -> dict[str, tuple[float, float]]:
+    if layout_df is None or layout_df.empty:
+        return {}
+
+    required_columns = {"symptom", "x", "y"}
+    if not required_columns.issubset(layout_df.columns):
+        return {}
+
+    df = layout_df.copy()
+    df["symptom"] = df["symptom"].fillna("").astype(str).str.strip()
+    df = df[df["symptom"] != ""].reset_index(drop=True)
+
+    if df.empty:
+        return {}
+
+    df["x"] = pd.to_numeric(df["x"], errors="coerce").fillna(0.0)
+    df["y"] = pd.to_numeric(df["y"], errors="coerce").fillna(0.0)
+
+    df["x"] = df["x"] - df["x"].mean()
+    df["y"] = df["y"] - df["y"].mean()
+
+    max_abs = max(df["x"].abs().max(), df["y"].abs().max(), 1.0)
+    target_radius = 250.0
+
+    df["x"] = (df["x"] / max_abs) * target_radius
+    df["y"] = (df["y"] / max_abs) * target_radius
+
+    return {
+        row.symptom: (float(row.x), float(row.y))
+        for row in df.itertuples(index=False)
+    }
+
+
+def render_pyvis_graph(
+    graph: nx.Graph,
+    layout_df: pd.DataFrame | None = None,
+) -> str:
+    layout_map = build_layout_map(layout_df)
+    has_fixed_layout = len(layout_map) > 0
+
     net = Network(
         height="650px",
         width="100%",
@@ -139,56 +248,237 @@ def render_pyvis_graph(graph: nx.Graph) -> str:
         font_color="#111827",
     )
 
-    net.barnes_hut()
+    if not has_fixed_layout:
+        net.barnes_hut()
 
     for node, attrs in graph.nodes(data=True):
         intensity = float(attrs.get("intensity", 1))
         category = attrs.get("category", "Autre")
-        color = color_for_category(category)
 
-        net.add_node(
-            node,
-            label=node,
-            title=f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
-            color=color,
-            size=15 + (intensity * 3),
-        )
+        node_kwargs = {
+            "label": node,
+            "title": (
+                f"{node}"
+                f"<br>Catégorie : {category}"
+                f"<br>Intensité : {intensity}"
+            ),
+            "shape": shape_for_category(category),
+            "size": 15 + (intensity * 3),
+            "color": {
+                "background": "#ffffff",
+                "border": "#111827",
+                "highlight": {
+                    "background": "#f3f4f6",
+                    "border": "#111827",
+                },
+                "hover": {
+                    "background": "#f9fafb",
+                    "border": "#111827",
+                },
+            },
+            "borderWidth": 2,
+            "font": {
+                "size": 18,
+                "face": "arial",
+                "color": "#111827",
+                "strokeWidth": 4,
+                "strokeColor": "#ffffff",
+                "vadjust": -10,
+            },
+        }
+
+        if node in layout_map:
+            x, y = layout_map[node]
+            node_kwargs["x"] = x
+            node_kwargs["y"] = y
+            node_kwargs["physics"] = False
+
+        net.add_node(node, **node_kwargs)
 
     for source, target, attrs in graph.edges(data=True):
-        weight = float(attrs.get("weight", 0.1))
+        weight = float(attrs.get("weight", 0.0))
+        abs_weight = abs(weight)
+        relation_label = "Positive" if weight >= 0 else "Négative"
 
         net.add_edge(
             source,
             target,
-            value=weight * 5,
-            title=f"Poids: {weight}",
+            value=max(abs_weight, 0.05) * 5,
+            width=edge_width_for_weight(weight),
+            color=rgba_from_gray(80, edge_opacity_for_weight(weight)),
+            dashes=(weight < 0),
+            title=(
+                f"Relation {relation_label.lower()}"
+                f"<br>Poids : {weight:.2f}"
+                f"<br>Force absolue : {abs_weight:.2f}"
+                f"<br>Style : {'pointillé' if weight < 0 else 'continu'}"
+            ),
+            physics=not has_fixed_layout,
+            smooth=False,
         )
 
-    net.set_options(
-        """
-        {
-          "interaction": {
-            "hover": true,
-            "navigationButtons": true,
-            "keyboard": true
-          },
-          "physics": {
-            "enabled": true,
-            "barnesHut": {
-              "gravitationalConstant": -3000,
-              "springLength": 180,
-              "springConstant": 0.04
+    if has_fixed_layout:
+        net.set_options(
+            """
+            {
+              "interaction": {
+                "hover": true,
+                "navigationButtons": true,
+                "keyboard": true
+              },
+              "physics": {
+                "enabled": false
+              }
             }
-          }
-        }
-        """
-    )
+            """
+        )
+    else:
+        net.set_options(
+            """
+            {
+              "interaction": {
+                "hover": true,
+                "navigationButtons": true,
+                "keyboard": true
+              },
+              "physics": {
+                "enabled": true,
+                "barnesHut": {
+                  "gravitationalConstant": -3000,
+                  "springLength": 180,
+                  "springConstant": 0.04
+                }
+              }
+            }
+            """
+        )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         html = Path(tmp_file.name).read_text(encoding="utf-8")
 
     return html
+
+
+# --- R analysis ------------------------------------------------------------
+def export_network_to_json(
+    symptoms_df: pd.DataFrame,
+    edges_df: pd.DataFrame,
+    path: str = "data/network_data.json",
+) -> str:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "nodes": symptoms_df.to_dict(orient="records"),
+        "edges": edges_df.to_dict(orient="records"),
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return path
+
+
+def load_r_analysis_results(
+    path: str = "data/r_results.json",
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict | None]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        if isinstance(payload, list):
+            metrics_df = pd.DataFrame(payload)
+            layout_df = None
+            metadata = None
+        elif isinstance(payload, dict):
+            metrics_df = pd.DataFrame(payload.get("metrics", []))
+            layout_df = pd.DataFrame(payload.get("layout", []))
+            metadata = payload.get("metadata")
+        else:
+            return None, None, None
+
+        if metrics_df is not None and not metrics_df.empty:
+            numeric_columns = [
+                "strength",
+                "closeness",
+                "betweenness",
+                "expected_influence",
+            ]
+            for col in numeric_columns:
+                if col in metrics_df.columns:
+                    metrics_df[col] = pd.to_numeric(
+                        metrics_df[col], errors="coerce"
+                    ).fillna(0.0)
+
+            sort_columns = [
+                col
+                for col in [
+                    "expected_influence",
+                    "strength",
+                    "closeness",
+                    "betweenness",
+                    "symptom",
+                ]
+                if col in metrics_df.columns
+            ]
+            ascending = [False, False, False, False, True][: len(sort_columns)]
+
+            if sort_columns:
+                metrics_df = metrics_df.sort_values(
+                    by=sort_columns,
+                    ascending=ascending,
+                ).reset_index(drop=True)
+
+        if layout_df is not None and not layout_df.empty:
+            for col in ["x", "y"]:
+                if col in layout_df.columns:
+                    layout_df[col] = pd.to_numeric(
+                        layout_df[col], errors="coerce"
+                    ).fillna(0.0)
+
+            if "symptom" in layout_df.columns:
+                layout_df["symptom"] = (
+                    layout_df["symptom"].fillna("").astype(str).str.strip()
+                )
+                layout_df = layout_df[layout_df["symptom"] != ""].reset_index(drop=True)
+
+        return metrics_df, layout_df, metadata
+
+    except FileNotFoundError:
+        return None, None, None
+    except json.JSONDecodeError:
+        return None, None, None
+
+
+def build_network_snapshot(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) -> str:
+    payload = {
+        "nodes": symptoms_df.to_dict(orient="records"),
+        "edges": edges_df.to_dict(orient="records"),
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
+def run_r_analysis() -> bool:
+    try:
+        result = subprocess.run(
+            ["Rscript", "r/analyze_network.R"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.stdout:
+            st.info(result.stdout)
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        st.error("Erreur pendant l'exécution du script R.")
+        if e.stdout:
+            st.code(e.stdout)
+        if e.stderr:
+            st.code(e.stderr)
+        return False
 
 
 # --- Page setup ------------------------------------------------------------
@@ -215,7 +505,7 @@ with left_col:
     symptoms_df = st.data_editor(
         DEFAULT_SYMPTOMS,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "label": st.column_config.TextColumn("Symptôme", required=True),
@@ -243,7 +533,7 @@ with right_col:
     edges_df = st.data_editor(
         DEFAULT_EDGES,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "source": st.column_config.SelectboxColumn(
@@ -258,11 +548,15 @@ with right_col:
             ),
             "weight": st.column_config.NumberColumn(
                 "Poids",
-                min_value=0.1,
+                min_value=-1.0,
                 max_value=1.0,
                 step=0.1,
             ),
         },
+    )
+    st.caption(
+        "Poids négatif = relation protectrice / inhibitrice. "
+        "Poids positif = relation activante / aggravante."
     )
 
 # --- Data preparation ------------------------------------------------------
@@ -270,7 +564,31 @@ symptoms_df = normalize_symptoms_df(pd.DataFrame(symptoms_df))
 valid_labels = set(symptoms_df["label"].tolist())
 edges_df = normalize_edges_df(pd.DataFrame(edges_df), valid_labels)
 
+if "r_metrics_df" not in st.session_state:
+    st.session_state["r_metrics_df"] = None
+
+if "r_layout_df" not in st.session_state:
+    st.session_state["r_layout_df"] = None
+
+if "r_layout_metadata" not in st.session_state:
+    st.session_state["r_layout_metadata"] = None
+
+if "last_analyzed_network_snapshot" not in st.session_state:
+    st.session_state["last_analyzed_network_snapshot"] = None
+
 graph = build_graph(symptoms_df, edges_df)
+
+# --- Detect network modifications ------------------------------------------
+current_snapshot = build_network_snapshot(symptoms_df, edges_df)
+
+if (
+    st.session_state["last_analyzed_network_snapshot"] is not None
+    and st.session_state["last_analyzed_network_snapshot"] != current_snapshot
+):
+    st.session_state["r_metrics_df"] = None
+    st.session_state["r_layout_df"] = None
+    st.session_state["r_layout_metadata"] = None
+
 metrics_df = compute_metrics(graph)
 
 # --- Results ---------------------------------------------------------------
@@ -281,34 +599,100 @@ kpi_col1.metric("Nombre de symptômes", graph.number_of_nodes())
 kpi_col2.metric("Nombre de relations", graph.number_of_edges())
 kpi_col3.metric(
     "Symptôme le plus central",
-    metrics_df.iloc[0]["symptom"] if not metrics_df.empty else "-",
+    (
+        st.session_state["r_metrics_df"].iloc[0]["symptom"]
+        if st.session_state["r_metrics_df"] is not None and not st.session_state["r_metrics_df"].empty
+        else "-"
+    ),
 )
 
-legend_cols = st.columns(3)
-legend_cols[0].markdown("🔴 **Diagnostic**")
-legend_cols[1].markdown("🔵 **Environnement**")
-legend_cols[2].markdown("🟢 **Autre**")
+action_col1, action_col2 = st.columns([1, 1])
+
+with action_col1:
+    if st.button("Analyser le réseau avec R"):
+        export_network_to_json(symptoms_df, edges_df)
+        success = run_r_analysis()
+
+        if success:
+            st.session_state["last_analyzed_network_snapshot"] = (
+                build_network_snapshot(
+                    symptoms_df,
+                    edges_df,
+                )
+            )
+             
+            r_metrics_df, r_layout_df, r_layout_metadata = load_r_analysis_results()
+
+            if r_metrics_df is not None:
+                st.session_state["r_metrics_df"] = r_metrics_df
+                st.session_state["r_layout_df"] = r_layout_df
+                st.session_state["r_layout_metadata"] = r_layout_metadata
+                st.success("Analyse R terminée avec succès.")
+            else:
+                st.error("Le fichier de résultats R est introuvable ou vide.")
+
+with action_col2:
+    if st.button("Réinitialiser les résultats R"):
+        st.session_state["r_metrics_df"] = None
+        st.session_state["r_layout_df"] = None
+        st.session_state["r_layout_metadata"] = None
+        st.session_state["last_analyzed_network_snapshot"] = None
+        st.success("Résultats R réinitialisés.")
+        st.rerun()
+
+r_metrics_df = st.session_state.get("r_metrics_df")
+r_layout_df = st.session_state.get("r_layout_df")
+r_layout_metadata = st.session_state.get("r_layout_metadata")
 
 graph_col, metrics_col = st.columns([2, 1])
 
 with graph_col:
     st.subheader("Réseau")
-    if graph.number_of_nodes() == 0:
-        st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
+    st.caption(
+        "La forme des nœuds représente la catégorie. "
+        "La taille des nœuds représente l'intensité. "
+        "L'épaisseur des arêtes représente la force absolue. "
+        "Les arêtes continues sont positives ; les arêtes pointillées sont négatives."
+    )
+
+    legend_cols = st.columns(4)
+    legend_cols[0].markdown("● **Diagnostic**")
+    legend_cols[1].markdown("■ **Environnement**")
+    legend_cols[2].markdown("▲ **Autre**")
+    legend_cols[3].markdown("━ / ┄ **Continu = positif, pointillé = négatif**")
+
+    if r_metrics_df is None:
+        st.info("Lancez l'analyse R pour afficher le réseau.")
     else:
-        html = render_pyvis_graph(graph)
-        st.components.v1.html(html, height=700, scrolling=True)
+        html = render_pyvis_graph(graph, layout_df=r_layout_df)
+
+        if isinstance(r_layout_metadata, dict):
+            layout_engine = r_layout_metadata.get("layout_engine")
+            fallback_used = r_layout_metadata.get("layout_fallback_used")
+            layout_warning = r_layout_metadata.get("layout_warning")
+
+            if layout_engine:
+                layout_label = f"Layout utilisé : {layout_engine}"
+                if fallback_used:
+                    layout_label += " (fallback)"
+                st.caption(layout_label)
+
+            if layout_warning:
+                st.caption(f"Information de rendu : {layout_warning}")
+
+        tmp_path = Path("data/network_preview.html")
+        tmp_path.write_text(html, encoding="utf-8")
+
+        st.iframe(str(tmp_path), height=700)
 
 with metrics_col:
     st.subheader("Centralités")
-    if metrics_df.empty:
-        st.info("Aucune métrique disponible.")
+
+    if r_metrics_df is not None and not r_metrics_df.empty:
+        st.caption("Résultats calculés par R")
+        st.dataframe(r_metrics_df, width="stretch", hide_index=True)
+
+        top_symptom = r_metrics_df.iloc[0]["symptom"]
+        st.write(f"Le symptôme le plus central selon R est **{top_symptom}**.")
     else:
-        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-
-        top_symptom = metrics_df.iloc[0]["symptom"]
-        st.write(f"Le symptôme le plus central actuellement est **{top_symptom}**.")
-
-        if len(metrics_df) >= 3:
-            top_3 = ", ".join(metrics_df.head(3)["symptom"].tolist())
-            st.write(f"Top 3 actuel : **{top_3}**.")
+        st.info("Les résultats seront affichés ici après l'analyse R.")

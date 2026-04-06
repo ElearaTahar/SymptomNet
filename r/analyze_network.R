@@ -150,6 +150,15 @@ metrics <- metrics[order(
   metrics$symptom
 ), ]
 
+edges_for_layout <- edges[edges$abs_weight > 0, c("source", "target", "abs_weight")]
+colnames(edges_for_layout) <- c("source", "target", "weight")
+
+g_layout <- graph_from_data_frame(
+  d = edges_for_layout,
+  vertices = nodes,
+  directed = FALSE
+)
+
 # --- Build layout output ----------------------------------------------------
 if (vcount(g_signed) == 1) {
   layout <- data.frame(
@@ -158,11 +167,21 @@ if (vcount(g_signed) == 1) {
     y = 0,
     stringsAsFactors = FALSE
   )
-} else {
-  layout_matrix <- layout_with_fr(g_signed)
-
+} else if (ecount(g_layout) == 0) {
   layout <- data.frame(
     symptom = V(g_signed)$name,
+    x = 0,
+    y = 0,
+    stringsAsFactors = FALSE
+  )
+} else {
+  layout_matrix <- layout_with_fr(
+    g_layout,
+    weights = E(g_layout)$weight
+  )
+
+  layout <- data.frame(
+    symptom = V(g_layout)$name,
     x = round(layout_matrix[, 1], 6),
     y = round(layout_matrix[, 2], 6),
     stringsAsFactors = FALSE

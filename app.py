@@ -178,6 +178,32 @@ def color_for_category(category: str) -> str:
     return CATEGORY_COLORS.get(category, "#8b5cf6")
 
 
+def edge_color_for_weight(weight: float) -> str:
+    return "#dc2626" if weight >= 0 else "#2563eb"
+
+
+def edge_width_for_weight(weight: float) -> float:
+    abs_weight = abs(weight)
+    return 1.0 + (abs_weight * 6.0)
+
+
+def edge_opacity_for_weight(weight: float) -> float:
+    abs_weight = abs(weight)
+    return 0.25 + (abs_weight * 0.75)
+
+
+def rgba_from_hex(hex_color: str, alpha: float) -> str:
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return f"rgba(107,114,128,{alpha})"
+
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+
+    return f"rgba({r},{g},{b},{alpha:.3f})"
+
+
 def build_layout_map(layout_df: pd.DataFrame | None) -> dict[str, tuple[float, float]]:
     if layout_df is None or layout_df.empty:
         return {}
@@ -258,12 +284,27 @@ def render_pyvis_graph(
 
     for source, target, attrs in graph.edges(data=True):
         weight = float(attrs.get("weight", 0.1))
+        abs_weight = abs(weight)
+        edge_base_color = edge_color_for_weight(weight)
+        edge_color = rgba_from_hex(
+            edge_base_color,
+            edge_opacity_for_weight(weight),
+        )
+        relation_label = "Positive" if weight >= 0 else "Negative"
 
         net.add_edge(
             source,
             target,
-            value=weight * 5,
-            title=f"Poids: {weight}",
+            value=max(abs_weight, 0.05) * 5,
+            width=edge_width_for_weight(weight),
+            color=edge_color,
+            title=(
+                f"{relation_label} relation"
+                f"<br>Weight: {weight:.2f}"
+                f"<br>Absolute strength: {abs_weight:.2f}"
+            ),
+            physics=False if has_fixed_layout else True,
+            smooth=False,
         )
 
     if has_fixed_layout:
@@ -489,6 +530,9 @@ with right_col:
             ),
         },
     )
+    st.caption(
+        "Poids négatif = protecteur/inhibiteur; poids positif = activant/aggravant."
+    )
 
 # --- Data preparation ------------------------------------------------------
 symptoms_df = normalize_symptoms_df(pd.DataFrame(symptoms_df))
@@ -548,6 +592,7 @@ graph_col, metrics_col = st.columns([2, 1])
 
 with graph_col:
     st.subheader("Réseau")
+    st.caption("Arête rouge = relation aggravante/activante. Arête bleue = relation inhibitrice/protectrice.")
     if graph.number_of_nodes() == 0:
         st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
     else:

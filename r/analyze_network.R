@@ -1,5 +1,9 @@
 library(jsonlite)
 library(igraph)
+
+if (!requireNamespace("qgraph", quietly = TRUE)) {
+  install.packages("qgraph", repos = "https://cloud.r-project.org")
+}
 library(qgraph)
 
 input_path <- "data/network_data.json"

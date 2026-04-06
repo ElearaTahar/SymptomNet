@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -459,6 +460,13 @@ def build_network_snapshot(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame) ->
 
 
 def run_r_analysis() -> bool:
+    if shutil.which("Rscript") is None:
+        st.error(
+            "R n'est pas disponible dans l'environnement serveur. "
+            "L'analyse réseau ne peut pas être exécutée."
+        )
+        return False
+
     try:
         result = subprocess.run(
             ["Rscript", "r/analyze_network.R"],

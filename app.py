@@ -178,7 +178,18 @@ def color_for_category(category: str) -> str:
     return CATEGORY_COLORS.get(category, "#8b5cf6")
 
 
-def render_pyvis_graph(graph: nx.Graph) -> str:
+def render_pyvis_graph(
+    graph: nx.Graph,
+    layout_df: pd.DataFrame | None = None,
+) -> str:
+    layout_map: dict[str, tuple[float, float]] = {}
+
+    if layout_df is not None and not layout_df.empty:
+        required_columns = {"symptom", "x", "y"}
+        if required_columns.issubset(layout_df.columns):
+            for row in layout_df.itertuples(index=False):
+                layout_map[str(row.symptom)] = (float(row.x), float(row.y))
+
     net = Network(
         height="650px",
         width="100%",
@@ -186,20 +197,28 @@ def render_pyvis_graph(graph: nx.Graph) -> str:
         font_color="#111827",
     )
 
-    net.barnes_hut()
+    if layout_df is None or layout_df.empty:
+        net.barnes_hut()
 
     for node, attrs in graph.nodes(data=True):
         intensity = float(attrs.get("intensity", 1))
         category = attrs.get("category", "Autre")
         color = color_for_category(category)
 
-        net.add_node(
-            node,
-            label=node,
-            title=f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
-            color=color,
-            size=15 + (intensity * 3),
-        )
+        node_kwargs = {
+            "label": node,
+            "title": f"{node}<br>Catégorie: {category}<br>Intensité: {intensity}",
+            "color": color,
+            "size": 15 + (intensity * 3),
+        }
+
+        if node in layout_map:
+            x, y = layout_map[node]
+            node_kwargs["x"] = x * 500
+            node_kwargs["y"] = y * 500
+            node_kwargs["physics"] = False
+
+        net.add_node(node, **node_kwargs)
 
     for source, target, attrs in graph.edges(data=True):
         weight = float(attrs.get("weight", 0.1))
@@ -211,25 +230,43 @@ def render_pyvis_graph(graph: nx.Graph) -> str:
             title=f"Poids: {weight}",
         )
 
-    net.set_options(
-        """
-        {
-          "interaction": {
-            "hover": true,
-            "navigationButtons": true,
-            "keyboard": true
-          },
-          "physics": {
-            "enabled": true,
-            "barnesHut": {
-              "gravitationalConstant": -3000,
-              "springLength": 180,
-              "springConstant": 0.04
+        has_fixed_layout = len(layout_map) > 0
+
+    if has_fixed_layout:
+        net.set_options(
+            """
+            {
+              "interaction": {
+                "hover": true,
+                "navigationButtons": true,
+                "keyboard": true
+              },
+              "physics": {
+                "enabled": false
+              }
             }
-          }
-        }
-        """
-    )
+            """
+        )
+    else:
+        net.set_options(
+            """
+            {
+              "interaction": {
+                "hover": true,
+                "navigationButtons": true,
+                "keyboard": true
+              },
+              "physics": {
+                "enabled": true,
+                "barnesHut": {
+                  "gravitationalConstant": -3000,
+                  "springLength": 180,
+                  "springConstant": 0.04
+                }
+              }
+            }
+            """
+        )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
@@ -253,41 +290,73 @@ def export_network_to_json(symptoms_df: pd.DataFrame, edges_df: pd.DataFrame, pa
     return path
 
 
-def load_r_results(path: str = "data/r_results.json") -> pd.DataFrame | None:
+def load_r_analysis_results(
+    path: str = "data/r_results.json",
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 
         if isinstance(payload, list):
-            df = pd.DataFrame(payload)
+            metrics_df = pd.DataFrame(payload)
+            layout_df = None
         elif isinstance(payload, dict):
-            df = pd.DataFrame(payload.get("metrics", []))
+            metrics_df = pd.DataFrame(payload.get("metrics", []))
+            layout_df = pd.DataFrame(payload.get("layout", []))
         else:
-            return None
+            return None, None
 
-        if df.empty:
-            return df
+        if metrics_df is not None and not metrics_df.empty:
+            numeric_columns = [
+                "strength",
+                "closeness",
+                "betweenness",
+                "expected_influence",
+            ]
+            for col in numeric_columns:
+                if col in metrics_df.columns:
+                    metrics_df[col] = pd.to_numeric(
+                        metrics_df[col], errors="coerce"
+                    ).fillna(0.0)
 
-        numeric_columns = ["strength", "closeness", "betweenness", "expected_influence"]
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            sort_columns = [
+                col
+                for col in [
+                    "expected_influence",
+                    "strength",
+                    "closeness",
+                    "betweenness",
+                    "symptom",
+                ]
+                if col in metrics_df.columns
+            ]
+            ascending = [False, False, False, False, True][: len(sort_columns)]
 
-        sort_columns = [
-            col for col in ["expected_influence", "strength", "closeness", "betweenness", "symptom"]
-            if col in df.columns
-        ]
-        ascending = [False, False, False, False, True][:len(sort_columns)]
+            if sort_columns:
+                metrics_df = metrics_df.sort_values(
+                    by=sort_columns,
+                    ascending=ascending,
+                ).reset_index(drop=True)
 
-        if sort_columns:
-            df = df.sort_values(by=sort_columns, ascending=ascending).reset_index(drop=True)
+        if layout_df is not None and not layout_df.empty:
+            for col in ["x", "y"]:
+                if col in layout_df.columns:
+                    layout_df[col] = pd.to_numeric(
+                        layout_df[col], errors="coerce"
+                    ).fillna(0.0)
 
-        return df
+            if "symptom" in layout_df.columns:
+                layout_df["symptom"] = (
+                    layout_df["symptom"].fillna("").astype(str).str.strip()
+                )
+                layout_df = layout_df[layout_df["symptom"] != ""].reset_index(drop=True)
+
+        return metrics_df, layout_df
 
     except FileNotFoundError:
-        return None
+        return None, None
     except json.JSONDecodeError:
-        return None
+        return None, None
 
 
 def run_r_analysis() -> bool:
@@ -398,6 +467,9 @@ metrics_df = compute_metrics(graph)
 if "r_metrics_df" not in st.session_state:
     st.session_state["r_metrics_df"] = None
 
+if "r_layout_df" not in st.session_state:
+    st.session_state["r_layout_df"] = None
+
 # --- Results ---------------------------------------------------------------
 st.divider()
 
@@ -418,10 +490,11 @@ with action_col1:
         success = run_r_analysis()
 
         if success:
-            r_metrics_df = load_r_results()
+            r_metrics_df, r_layout_df = load_r_analysis_results()
 
             if r_metrics_df is not None:
                 st.session_state["r_metrics_df"] = r_metrics_df
+                st.session_state["r_layout_df"] = r_layout_df
                 st.success("Analyse R terminée avec succès.")
             else:
                 st.error("Le fichier de résultats R est introuvable ou vide.")
@@ -429,6 +502,7 @@ with action_col1:
 with action_col2:
     if st.button("Réinitialiser les résultats R"):
         st.session_state["r_metrics_df"] = None
+        st.session_state["r_layout_df"] = None
         st.success("Résultats R réinitialisés.")
 
 legend_cols = st.columns(3)
@@ -443,7 +517,8 @@ with graph_col:
     if graph.number_of_nodes() == 0:
         st.info("Ajoutez au moins un symptôme pour afficher le réseau.")
     else:
-        html = render_pyvis_graph(graph)
+        r_layout_df = st.session_state.get("r_layout_df")
+        html = render_pyvis_graph(graph, layout_df=r_layout_df)
 
         tmp_path = Path("data/network_preview.html")
         tmp_path.write_text(html, encoding="utf-8")
